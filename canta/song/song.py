@@ -528,6 +528,8 @@ class MidiFile_:
         midi.write()
 
 
+class FormatError(ValueError):
+    pass
 
 class UltraStarFile:
 
@@ -574,23 +576,15 @@ class UltraStarFile:
             line = line.replace('\n', '')
 
             if (mode == "headers" or mode == "full") and line.startswith('#'):
-                words = line.strip('#').split(':')
-                if len(words) == 2:
-                    if words[0] == 'BPM' \
-                        or words[0] == 'GAP' \
-                        or words[0] == 'START':
-
-                        song.info[words[0].lower()] \
-                            = float(words[1].strip().replace(',', '.'))
-                    elif words[0] == 'MP3':
-                        song.info[words[0].lower()] \
-                            = words[1].strip()
-                    else:
-                        song.info[words[0].lower()] \
-                            = words[1].strip()
-                else:
-                    print 'error: something wrong in the songfile:'\
-                        + us_file, words
+                key, _, value = line.partition(":")
+                key = key[1:].lower()
+                value = value.strip()
+                if key in ("bpm", "gap", "videogap", "start"):
+                    try:
+                        value = float(value.replace(",", "."))
+                    except ValueError as e:
+                        raise FormatError("%s for %s" % (e, key))
+                song.info[key] = value
             elif mode=="headers":
                 # that must accellerate header-parsing for song-browser on startup
                 return
@@ -602,19 +596,13 @@ class UltraStarFile:
 
     def parse_segment(self, song, line):
         if line.startswith('-'):
-            words = line.split(' ')
-            if len(words) == 1:
+            try:
                 song.addSegment(SongSegment( "pause", \
-                    float(words[0][1:]), '', '', ''))
-            elif len(words) == 2:
-                song.addSegment(SongSegment( "pause", \
-                    float(words[1]), '', '', ''))
-            elif len(words) == 3:
-                song.addSegment(SongSegment( "pause", \
-                    float(words[2]), '', '', ''))
-            else:
-                print 'Song - readFile()-error: something wrong in the songfile'
-                sys.exit()
+                    float(line[1:].split()[-1]), '', '', ''))
+            except IndexError:
+                raise FormatError("infinite pause")
+            except ValueError as e:
+                raise FormatError("%s is no pause" % line)
 
         # Find out if the note is a
         #   : <- normal note
@@ -622,14 +610,20 @@ class UltraStarFile:
         #   F <- freestyle note
         elif line.startswith(':') or line.startswith('*') or line.startswith('F'):
             words = line.split(' ', 4)
+            # The Rammstein fix.
+            if line[1] != " ":
+                words[0:1] = "", words[0][1:]
             special = freestyle = False
             if line.startswith('*'):
                 special = True
             elif line.startswith('F'):
                 freestyle = True
-            time_stamp = int(words[1])
-            duration = int(words[2])
-            pitch = int(words[3])
+            try:
+                time_stamp = int(words[1])
+                duration = int(words[2])
+                pitch = int(words[3])
+            except (IndexError, ValueError):
+                raise FormatError("broken %s" % line)
             if not song.octave:
                 pitch = pitch
             if len(words) == 5:
@@ -644,8 +638,11 @@ class UltraStarFile:
                         text, special, freestyle))
 
         elif line.startswith('E'):
-            song.addSegment(SongSegment("end", \
-                float(song.segments[-1].time_stamp), '', '', ''))
+            try:
+                song.addSegment(SongSegment("end", \
+                    float(song.segments[-1].time_stamp), '', '', ''))
+            except IndexError:
+                raise FormatError("premature end %s" % line)
 
 
 
